@@ -5,3 +5,6 @@ langchain-tavily==0.2.18
 requests==2.34.2
 python-dotenv
 langchainhub
+streamlit
+certifi
+langsmith
