@@ -1,4 +1,6 @@
 import os
+import time
+import logging
 import certifi
 import requests
 import streamlit as st
@@ -29,11 +31,26 @@ st.set_page_config(
 # ==========================================
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 WEATHERSTACK_API_KEY = os.getenv("WEATHERSTACK_API_KEY")
+
+
+# ==========================================
+# LOGGING
+# ==========================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+logger.info("Application started")
 
 
 # ==========================================
@@ -51,28 +68,61 @@ def get_weather_data(city: str) -> str:
     Fetch current weather information for a city.
     """
 
-    url = (
-        "https://api.weatherstack.com/current"
-        f"?access_key={WEATHERSTACK_API_KEY}"
-        f"&query={city}"
-    )
+    logger.info("Weather tool called | city=%s", city)
 
-    response = requests.get(
-        url,
-        timeout=10
-    )
+    start_time = time.time()
 
-    data = response.json()
+    try:
+        url = (
+            "https://api.weatherstack.com/current"
+            f"?access_key={WEATHERSTACK_API_KEY}"
+            f"&query={city}"
+        )
 
-    if "current" not in data:
-        return f"Could not fetch weather data for {city}"
+        logger.info("Sending request to Weatherstack | city=%s", city)
 
-    return (
-        f"City: {city}\n"
-        f"Temperature: {data['current']['temperature']}°C\n"
-        f"Weather: {data['current']['weather_descriptions'][0]}\n"
-        f"Humidity: {data['current']['humidity']}%"
-    )
+        response = requests.get(
+            url,
+            timeout=10
+        )
+
+        duration = time.time() - start_time
+
+        logger.info(
+            "Weatherstack responded | status=%s | duration=%.2fs",
+            response.status_code,
+            duration,
+        )
+
+        data = response.json()
+
+        if "current" not in data:
+            logger.warning(
+                "Weather data missing | city=%s | response=%s",
+                city,
+                data,
+            )
+
+            return f"Could not fetch weather data for {city}"
+
+        logger.info(
+            "Weather tool completed successfully | city=%s",
+            city,
+        )
+
+        return (
+            f"City: {city}\n"
+            f"Temperature: {data['current']['temperature']}°C\n"
+            f"Weather: {data['current']['weather_descriptions'][0]}\n"
+            f"Humidity: {data['current']['humidity']}%"
+        )
+
+    except Exception:
+        logger.exception(
+            "Weather tool failed | city=%s",
+            city,
+        )
+        raise
 
 
 tools = [
@@ -91,6 +141,8 @@ rate_limiter = InMemoryRateLimiter(
     max_bucket_size=1,
 )
 
+logger.info("Creating Gemini LLM")
+
 llm = ChatGoogleGenerativeAI(
     model="gemini-flash-lite-latest",
     temperature=0,
@@ -104,6 +156,8 @@ llm = ChatGoogleGenerativeAI(
 # PROMPT
 # ==========================================
 
+logger.info("Loading ReAct prompt from LangSmith")
+
 prompt = LangSmithClient().pull_prompt(
     "hwchase17/react",
     dangerously_pull_public_prompt=True,
@@ -113,6 +167,8 @@ prompt = LangSmithClient().pull_prompt(
 # ==========================================
 # CREATE AGENT
 # ==========================================
+
+logger.info("Creating ReAct agent")
 
 agent = create_react_agent(
     llm=llm,
@@ -182,6 +238,11 @@ user_input = st.chat_input(
 
 if user_input:
 
+    logger.info(
+        "New user message | input=%r",
+        user_input,
+    )
+
     st.session_state.messages.append(
         {
             "role": "user",
@@ -203,15 +264,36 @@ if user_input:
 
             try:
 
+                logger.info("Agent started")
+
+                start_time = time.time()
+
                 response = agent_executor.invoke(
                     {
                         "input": user_input
                     }
                 )
 
+                duration = time.time() - start_time
+
+                logger.info(
+                    "Agent completed | duration=%.2fs",
+                    duration,
+                )
+
+                logger.info(
+                    "Agent response received | output=%r",
+                    response.get("output"),
+                )
+
                 answer = response["output"]
 
             except Exception as error:
+
+                logger.exception(
+                    "Agent failed | error=%s",
+                    error,
+                )
 
                 answer = (
                     "Something went wrong while running the agent.\n\n"
@@ -231,3 +313,5 @@ if user_input:
             "content": answer,
         }
     )
+
+    logger.info("Assistant message saved to session")
